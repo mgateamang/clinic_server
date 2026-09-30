@@ -37,9 +37,10 @@ struct Appointment {
     std::string status; // PENDING, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW
     std::string created_at;
     std::string patient_name;
+    std::string patient_phone;
     std::string doctor_name;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(Appointment, id, patient_id, doctor_id, appointment_time, reason, status, created_at, patient_name, doctor_name)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(Appointment, id, patient_id, doctor_id, appointment_time, reason, status, created_at, patient_name, patient_phone, doctor_name)
 };
 
 struct InventoryItem {

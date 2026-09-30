@@ -339,7 +339,7 @@ std::vector<Appointment> Database::getAppointments(const std::optional<std::stri
     std::vector<Appointment> list;
     std::string sql = R"SQL(
         SELECT a.id, a.patient_id, a.doctor_id, a.appointment_time, a.reason, a.status, a.created_at,
-               (p.first_name || ' ' || p.last_name) AS patient_name, d.name AS doctor_name
+               (p.first_name || ' ' || p.last_name) AS patient_name, p.phone AS patient_phone, d.name AS doctor_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         JOIN doctors d ON a.doctor_id = d.id
@@ -367,7 +367,9 @@ std::vector<Appointment> Database::getAppointments(const std::optional<std::stri
             a.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
             a.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
             a.patient_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
-            a.doctor_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            const char* phone = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            if (phone) a.patient_phone = phone;
+            a.doctor_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
             list.push_back(a);
         }
         sqlite3_finalize(stmt);
@@ -380,7 +382,7 @@ std::optional<Appointment> Database::getAppointmentById(int64_t id) {
     sqlite3_stmt* stmt = nullptr;
     const char* sql = R"SQL(
         SELECT a.id, a.patient_id, a.doctor_id, a.appointment_time, a.reason, a.status, a.created_at,
-               (p.first_name || ' ' || p.last_name) AS patient_name, d.name AS doctor_name
+               (p.first_name || ' ' || p.last_name) AS patient_name, p.phone AS patient_phone, d.name AS doctor_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         JOIN doctors d ON a.doctor_id = d.id
@@ -399,7 +401,9 @@ std::optional<Appointment> Database::getAppointmentById(int64_t id) {
             a.status = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
             a.created_at = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
             a.patient_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
-            a.doctor_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            const char* phone = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 8));
+            if (phone) a.patient_phone = phone;
+            a.doctor_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
             sqlite3_finalize(stmt);
             return a;
         }
@@ -1034,10 +1038,12 @@ DailySummaryReport Database::getDailySummary(const std::string& date) {
     const char* salesSql = R"SQL(
         SELECT COALESCE(SUM(total_amount), 0.0), COUNT(*)
         FROM sales_transactions
-        WHERE strftime('%Y-%m-%d', created_at) = ? AND payment_status = 'PAID';
+        WHERE (strftime('%Y-%m-%d', created_at) = ? OR strftime('%Y-%m-%d', created_at, 'localtime') = ?)
+          AND payment_status = 'PAID';
     )SQL";
     if (sqlite3_prepare_v2(db_, salesSql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, date.c_str(), -1, SQLITE_TRANSIENT);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             report.total_sales_amount = sqlite3_column_double(stmt, 0);
             report.total_transactions = sqlite3_column_int(stmt, 1);
@@ -1048,10 +1054,12 @@ DailySummaryReport Database::getDailySummary(const std::string& date) {
     // Prescriptions dispensed
     const char* rxSql = R"SQL(
         SELECT COUNT(*) FROM prescriptions
-        WHERE strftime('%Y-%m-%d', created_at) = ? AND status = 'DISPENSED';
+        WHERE (strftime('%Y-%m-%d', created_at) = ? OR strftime('%Y-%m-%d', created_at, 'localtime') = ?)
+          AND status = 'DISPENSED';
     )SQL";
     if (sqlite3_prepare_v2(db_, rxSql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, date.c_str(), -1, SQLITE_TRANSIENT);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             report.total_prescriptions_dispensed = sqlite3_column_int(stmt, 0);
         }
