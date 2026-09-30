@@ -10,7 +10,8 @@ namespace aidans {
 
 class ClinicServer {
 public:
-    ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir = "");
+    ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir = "",
+                 const std::string& redisHost = "127.0.0.1", int redisPort = 6379);
     ~ClinicServer() = default;
 
     void registerRoutes();

@@ -17,6 +17,8 @@ int main(int argc, char* argv[]) {
     int port = 8080;
     std::string dbPath = "aidans.db";
     std::string staticDir = "../clinic_portal";
+    std::string redisHost = "127.0.0.1";
+    int redisPort = 6379;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -28,12 +30,18 @@ int main(int argc, char* argv[]) {
             dbPath = argv[++i];
         } else if (arg == "--static-dir" && i + 1 < argc) {
             staticDir = argv[++i];
+        } else if (arg == "--redis-host" && i + 1 < argc) {
+            redisHost = argv[++i];
+        } else if (arg == "--redis-port" && i + 1 < argc) {
+            redisPort = std::stoi(argv[++i]);
         } else if (arg == "--help") {
             std::cout << "Usage: clinic_server [options]\n"
                       << "  --host <ip>          Bind IP (default: 0.0.0.0)\n"
                       << "  --port <port>        Port number (default: 8080)\n"
                       << "  --db <path>          SQLite DB path (default: aidans.db)\n"
                       << "  --static-dir <dir>   Static files directory for clinic_portal\n"
+                      << "  --redis-host <host>  Redis host (default: 127.0.0.1)\n"
+                      << "  --redis-port <port>  Redis port (default: 6379)\n"
                       << "  --help               Show this help message\n";
             return 0;
         }
@@ -47,7 +55,7 @@ int main(int argc, char* argv[]) {
               << "   Elizabeth's Clinic Backend Server\n"
               << "=========================================================\n";
 
-    aidans::ClinicServer server(host, port, dbPath, staticDir);
+    aidans::ClinicServer server(host, port, dbPath, staticDir, redisHost, redisPort);
     g_server = &server;
 
     server.registerRoutes();

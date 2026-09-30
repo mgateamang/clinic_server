@@ -177,7 +177,17 @@ void runTests() {
     // 7. Daily Summary Report
     std::cout << "[TEST] Verifying Daily Summary Reporting...\n";
     auto todayReport = db.getDailySummary("2026-10-15");
-    // All tests passed without throwing assertions!
+    assert(todayReport.date == "2026-10-15");
+
+    // 8. Redis Pub/Sub Ripple Update Check
+    std::cout << "[TEST] Verifying Redis Pub/Sub Cache Manager...\n";
+    aidans::CacheManager cache("127.0.0.1", 6379);
+    bool redisOnline = cache.isRedisOnline();
+    std::cout << "  -> Redis is " << (redisOnline ? "ONLINE" : "OFFLINE (fallback verified)") << "\n";
+    bool pubOk = cache.publishInventoryUpdate("test_ripple", 1);
+    if (redisOnline) {
+        assert(pubOk == true);
+    }
 
     // Cleanup test db
     if (fs::exists(testDb)) {

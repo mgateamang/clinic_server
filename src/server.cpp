@@ -9,8 +9,9 @@ namespace fs = std::filesystem;
 
 namespace aidans {
 
-ClinicServer::ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir)
-    : host_(host), port_(port), staticDir_(staticDir), db_(dbPath) {
+ClinicServer::ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir,
+                           const std::string& redisHost, int redisPort)
+    : host_(host), port_(port), staticDir_(staticDir), db_(dbPath), cache_(redisHost, redisPort) {
     db_.initSchema();
     db_.seedInitialDataIfEmpty();
 }
@@ -227,6 +228,7 @@ void ClinicServer::setupInventoryRoutes() {
                 return;
             }
             item.id = id;
+            cache_.publishInventoryUpdate("item_created", id);
             res.status = 201;
             nlohmann::json resp = item;
             res.set_content(resp.dump(), "application/json");
@@ -257,6 +259,8 @@ void ClinicServer::setupInventoryRoutes() {
                 return;
             }
 
+            cache_.publishInventoryUpdate("restock", id);
+
             auto item = db_.getInventoryItem(id);
             if (item.has_value()) {
                 nlohmann::json resp = item.value();
@@ -268,6 +272,22 @@ void ClinicServer::setupInventoryRoutes() {
             res.status = 400;
             res.set_content(nlohmann::json{{"error", e.what()}}.dump(), "application/json");
         }
+    });
+
+    // POST /api/v1/inventory/publish
+    svr_.Post("/api/v1/inventory/publish", [this](const httplib::Request& req, httplib::Response& res) {
+        std::string action = "manual_sync";
+        int64_t itemId = 0;
+        try {
+            if (!req.body.empty()) {
+                auto b = nlohmann::json::parse(req.body);
+                if (b.contains("action")) action = b["action"].get<std::string>();
+                if (b.contains("item_id")) itemId = b["item_id"].get<int64_t>();
+            }
+        } catch (...) {}
+        bool ok = cache_.publishInventoryUpdate(action, itemId);
+        res.status = 200;
+        res.set_content(nlohmann::json{{"published", ok}, {"action", action}, {"item_id", itemId}}.dump(), "application/json");
     });
 
     // GET /api/v1/inventory/alerts
@@ -373,6 +393,9 @@ void ClinicServer::setupPosRoutes() {
                 cache_.removePendingPrescription(saleReq.prescription_code);
             }
 
+            // Ripple update inventory to POS and Inventory terminals via Redis
+            cache_.publishInventoryUpdate("checkout", 0);
+
             res.status = 200;
             nlohmann::json resp = receipt;
             res.set_content(resp.dump(), "application/json");
@@ -434,11 +457,13 @@ void ClinicServer::setupReportRoutes() {
 }
 
 void ClinicServer::setupHealthRoutes() {
-    auto healthHandler = [](const httplib::Request&, httplib::Response& res) {
+    auto healthHandler = [this](const httplib::Request&, httplib::Response& res) {
+        bool redisOk = cache_.isRedisOnline();
         nlohmann::json j = {
             {"status", "ok"},
             {"service", "aidans_clinic_server"},
-            {"version", "1.0.0"}
+            {"version", "1.0.0"},
+            {"redis", redisOk ? "connected" : "offline"}
         };
         res.status = 200;
         res.set_content(j.dump(), "application/json");
