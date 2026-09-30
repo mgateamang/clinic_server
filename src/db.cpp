@@ -52,9 +52,13 @@ bool Database::initSchema() {
     std::lock_guard<std::mutex> lock(dbMutex_);
     if (!db_) return false;
 
-    // Enable WAL and Foreign Keys
+    // Enable WAL, Foreign Keys, and performance pragmas
     execute("PRAGMA journal_mode = WAL;");
     execute("PRAGMA foreign_keys = ON;");
+    execute("PRAGMA busy_timeout = 5000;");
+    execute("PRAGMA synchronous = NORMAL;");
+    execute("PRAGMA cache_size = -64000;");
+    execute("PRAGMA temp_store = MEMORY;");
 
     const char* schema = R"SQL(
         CREATE TABLE IF NOT EXISTS doctors (
@@ -76,6 +80,7 @@ bool Database::initSchema() {
             address TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE INDEX IF NOT EXISTS idx_patients_phone ON patients(phone);
 
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +94,8 @@ bool Database::initSchema() {
             FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE RESTRICT
         );
         CREATE INDEX IF NOT EXISTS idx_appointments_slot ON appointments(doctor_id, appointment_time);
+        CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id);
+        CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
 
         CREATE TABLE IF NOT EXISTS inventory_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +108,7 @@ bool Database::initSchema() {
             unit TEXT NOT NULL DEFAULT 'unit',
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE INDEX IF NOT EXISTS idx_inventory_sku ON inventory_items(sku);
 
         CREATE TABLE IF NOT EXISTS prescriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +121,9 @@ bool Database::initSchema() {
             FOREIGN KEY (patient_id) REFERENCES patients(id) ON DELETE CASCADE,
             FOREIGN KEY (doctor_id) REFERENCES doctors(id) ON DELETE RESTRICT
         );
+        CREATE INDEX IF NOT EXISTS idx_prescriptions_patient ON prescriptions(patient_id);
+        CREATE INDEX IF NOT EXISTS idx_prescriptions_status ON prescriptions(status);
+        CREATE INDEX IF NOT EXISTS idx_prescriptions_code ON prescriptions(prescription_code);
 
         CREATE TABLE IF NOT EXISTS prescription_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,6 +134,7 @@ bool Database::initSchema() {
             FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE CASCADE,
             FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT
         );
+        CREATE INDEX IF NOT EXISTS idx_prescription_items_rx ON prescription_items(prescription_id);
 
         CREATE TABLE IF NOT EXISTS sales_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,6 +147,8 @@ bool Database::initSchema() {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE SET NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_sales_code ON sales_transactions(transaction_code);
+        CREATE INDEX IF NOT EXISTS idx_sales_created ON sales_transactions(created_at);
 
         CREATE TABLE IF NOT EXISTS sales_transaction_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +160,7 @@ bool Database::initSchema() {
             FOREIGN KEY (transaction_id) REFERENCES sales_transactions(id) ON DELETE CASCADE,
             FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT
         );
+        CREATE INDEX IF NOT EXISTS idx_sales_items_tx ON sales_transaction_items(transaction_id);
 
         CREATE TABLE IF NOT EXISTS inventory_audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,6 +172,7 @@ bool Database::initSchema() {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE
         );
+        CREATE INDEX IF NOT EXISTS idx_audit_item ON inventory_audit_logs(inventory_item_id);
     )SQL";
 
     return execute(schema);

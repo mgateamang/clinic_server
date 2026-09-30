@@ -14,7 +14,7 @@ namespace aidans {
 class CacheManager {
 public:
     explicit CacheManager(const std::string& redisHost = "127.0.0.1", int redisPort = 6379);
-    ~CacheManager() = default;
+    ~CacheManager();
 
     // Redis Pub/Sub & Health
     void setRedisConfig(const std::string& host, int port);
@@ -43,6 +43,8 @@ public:
 private:
     std::string redisHost_{"127.0.0.1"};
     int redisPort_{6379};
+    int persistentSock_{-1};
+    std::mutex socketMutex_;
 
     std::shared_mutex mutex_;
     // doctor_id -> map of date -> set of booked time strings

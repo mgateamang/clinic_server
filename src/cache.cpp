@@ -18,56 +18,95 @@ CacheManager::CacheManager(const std::string& redisHost, int redisPort)
     : redisHost_(redisHost), redisPort_(redisPort) {
 }
 
+CacheManager::~CacheManager() {
+    std::lock_guard<std::mutex> sockLock(socketMutex_);
+    if (persistentSock_ >= 0) {
+        close(persistentSock_);
+        persistentSock_ = -1;
+    }
+}
+
 void CacheManager::setRedisConfig(const std::string& host, int port) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::lock_guard<std::mutex> sockLock(socketMutex_);
     redisHost_ = host;
     redisPort_ = port;
+    if (persistentSock_ >= 0) {
+        close(persistentSock_);
+        persistentSock_ = -1;
+    }
 }
 
 bool CacheManager::sendRedisCommand(const std::string& cmd, std::string* replyOut) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return false;
+    std::lock_guard<std::mutex> sockLock(socketMutex_);
 
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 400000; // 400ms timeout
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+    auto connectSocket = [this]() -> bool {
+        if (persistentSock_ >= 0) {
+            close(persistentSock_);
+            persistentSock_ = -1;
+        }
 
-    struct sockaddr_in serv_addr;
-    std::memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(redisPort_);
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) return false;
 
-    if (inet_pton(AF_INET, redisHost_.c_str(), &serv_addr.sin_addr) <= 0) {
-        struct hostent* he = gethostbyname(redisHost_.c_str());
-        if (!he) {
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 400000; // 400ms timeout
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+
+        struct sockaddr_in serv_addr;
+        std::memset(&serv_addr, 0, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(redisPort_);
+
+        if (inet_pton(AF_INET, redisHost_.c_str(), &serv_addr.sin_addr) <= 0) {
+            struct hostent* he = gethostbyname(redisHost_.c_str());
+            if (!he) {
+                close(sock);
+                return false;
+            }
+            std::memcpy(&serv_addr.sin_addr, he->h_addr_list[0], he->h_length);
+        }
+
+        if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
             close(sock);
             return false;
         }
-        std::memcpy(&serv_addr.sin_addr, he->h_addr_list[0], he->h_length);
+
+        persistentSock_ = sock;
+        return true;
+    };
+
+    if (persistentSock_ < 0) {
+        if (!connectSocket()) return false;
     }
 
-    if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-        close(sock);
-        return false;
-    }
-
-    ssize_t sent = send(sock, cmd.c_str(), cmd.size(), 0);
+    // Try sending command on existing socket
+    ssize_t sent = send(persistentSock_, cmd.c_str(), cmd.size(), MSG_NOSIGNAL);
     if (sent != static_cast<ssize_t>(cmd.size())) {
-        close(sock);
-        return false;
+        // Reconnect once and retry
+        if (!connectSocket()) return false;
+        sent = send(persistentSock_, cmd.c_str(), cmd.size(), MSG_NOSIGNAL);
+        if (sent != static_cast<ssize_t>(cmd.size())) {
+            close(persistentSock_);
+            persistentSock_ = -1;
+            return false;
+        }
     }
 
     if (replyOut) {
         char buf[256];
-        ssize_t n = recv(sock, buf, sizeof(buf) - 1, 0);
+        ssize_t n = recv(persistentSock_, buf, sizeof(buf) - 1, 0);
         if (n > 0) {
             buf[n] = '\0';
             *replyOut = std::string(buf, n);
+        } else {
+            close(persistentSock_);
+            persistentSock_ = -1;
+            return false;
         }
     }
-    close(sock);
     return true;
 }
 
