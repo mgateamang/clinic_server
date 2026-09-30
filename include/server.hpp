@@ -39,6 +39,7 @@ private:
     void setupPosRoutes();
     void setupPaymentRoutes();
     void setupReportRoutes();
+    void setupHealthRoutes();
 
     static std::vector<std::string> generateStandardSlots(const std::string& dateStr);
 };

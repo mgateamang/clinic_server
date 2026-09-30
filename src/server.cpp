@@ -433,6 +433,21 @@ void ClinicServer::setupReportRoutes() {
     });
 }
 
+void ClinicServer::setupHealthRoutes() {
+    auto healthHandler = [](const httplib::Request&, httplib::Response& res) {
+        nlohmann::json j = {
+            {"status", "ok"},
+            {"service", "aidans_clinic_server"},
+            {"version", "1.0.0"}
+        };
+        res.status = 200;
+        res.set_content(j.dump(), "application/json");
+    };
+
+    svr_.Get("/health", healthHandler);
+    svr_.Get("/api/v1/health", healthHandler);
+}
+
 void ClinicServer::registerRoutes() {
     setupCors();
     setupStaticFiles();
@@ -443,6 +458,7 @@ void ClinicServer::registerRoutes() {
     setupPosRoutes();
     setupPaymentRoutes();
     setupReportRoutes();
+    setupHealthRoutes();
 }
 
 bool ClinicServer::start() {
