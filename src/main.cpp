@@ -19,6 +19,7 @@ int main(int argc, char* argv[]) {
     std::string staticDir = "../clinic_portal";
     std::string redisHost = "127.0.0.1";
     int redisPort = 6379;
+    bool verbose = true;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -34,6 +35,10 @@ int main(int argc, char* argv[]) {
             redisHost = argv[++i];
         } else if (arg == "--redis-port" && i + 1 < argc) {
             redisPort = std::stoi(argv[++i]);
+        } else if (arg == "--verbose") {
+            verbose = true;
+        } else if (arg == "--quiet" || arg == "-q") {
+            verbose = false;
         } else if (arg == "--help") {
             std::cout << "Usage: clinic_server [options]\n"
                       << "  --host <ip>          Bind IP (default: 0.0.0.0)\n"
@@ -42,6 +47,8 @@ int main(int argc, char* argv[]) {
                       << "  --static-dir <dir>   Static files directory for clinic_portal\n"
                       << "  --redis-host <host>  Redis host (default: 127.0.0.1)\n"
                       << "  --redis-port <port>  Redis port (default: 6379)\n"
+                      << "  --verbose            Enable detailed request logging (default: on)\n"
+                      << "  --quiet, -q          Suppress request/response logging\n"
                       << "  --help               Show this help message\n";
             return 0;
         }
@@ -55,7 +62,7 @@ int main(int argc, char* argv[]) {
               << "   Elizabeth's Clinic Backend Server\n"
               << "=========================================================\n";
 
-    aidans::ClinicServer server(host, port, dbPath, staticDir, redisHost, redisPort);
+    aidans::ClinicServer server(host, port, dbPath, staticDir, redisHost, redisPort, verbose);
     g_server = &server;
 
     server.registerRoutes();

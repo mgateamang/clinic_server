@@ -11,7 +11,7 @@ namespace aidans {
 class ClinicServer {
 public:
     ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir = "",
-                 const std::string& redisHost = "127.0.0.1", int redisPort = 6379);
+                 const std::string& redisHost = "127.0.0.1", int redisPort = 6379, bool verbose = true);
     ~ClinicServer() = default;
 
     void registerRoutes();
@@ -27,10 +27,12 @@ private:
     std::string host_;
     int port_;
     std::string staticDir_;
+    bool verbose_{true};
     Database db_;
     CacheManager cache_;
     httplib::Server svr_;
 
+    void setupLogging();
     void setupCors();
     void setupStaticFiles();
     void setupDoctorRoutes();

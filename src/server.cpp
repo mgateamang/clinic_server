@@ -4,20 +4,74 @@
 #include <sstream>
 #include <filesystem>
 #include <regex>
+#include <chrono>
+#include <iomanip>
 
 namespace fs = std::filesystem;
 
 namespace aidans {
 
+static thread_local std::chrono::steady_clock::time_point g_reqStartTime;
+
 ClinicServer::ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir,
-                           const std::string& redisHost, int redisPort)
-    : host_(host), port_(port), staticDir_(staticDir), db_(dbPath), cache_(redisHost, redisPort) {
+                           const std::string& redisHost, int redisPort, bool verbose)
+    : host_(host), port_(port), staticDir_(staticDir), verbose_(verbose), db_(dbPath), cache_(redisHost, redisPort) {
     db_.initSchema();
     db_.seedInitialDataIfEmpty();
 }
 
+void ClinicServer::setupLogging() {
+    svr_.set_logger([this](const httplib::Request& req, const httplib::Response& res) {
+        if (!verbose_) return;
+
+        auto now = std::chrono::system_clock::now();
+        auto in_time_t = std::chrono::system_clock::to_time_t(now);
+        std::stringstream timeStr;
+        timeStr << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
+
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - g_reqStartTime).count();
+        double ms = duration / 1000.0;
+
+        std::string statusColor = "\033[32m"; // green
+        if (res.status >= 400 && res.status < 500) statusColor = "\033[33m"; // yellow
+        else if (res.status >= 500) statusColor = "\033[31m"; // red
+
+        std::cout << "\033[90m[" << timeStr.str() << "]\033[0m "
+                  << "\033[1;36m" << req.method << "\033[0m "
+                  << req.path;
+
+        if (!req.params.empty()) {
+            std::cout << "?";
+            bool first = true;
+            for (const auto& [k, v] : req.params) {
+                if (!first) std::cout << "&";
+                std::cout << k << "=" << v;
+                first = false;
+            }
+        }
+
+        std::cout << " -> " << statusColor << res.status << "\033[0m"
+                  << " \033[90m(" << std::fixed << std::setprecision(2) << ms << "ms from "
+                  << req.remote_addr << ")\033[0m";
+
+        if (!req.body.empty() && req.method != "GET") {
+            std::string snippet = req.body;
+            if (snippet.size() > 180) snippet = snippet.substr(0, 180) + "...";
+            std::cout << "\n    \033[94mPayload:\033[0m " << snippet;
+        }
+
+        if (res.status >= 400 && !res.body.empty()) {
+            std::cout << "\n    \033[91mError:\033[0m " << res.body;
+        }
+
+        std::cout << std::endl;
+    });
+}
+
 void ClinicServer::setupCors() {
     svr_.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        g_reqStartTime = std::chrono::steady_clock::now();
         res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
@@ -474,6 +528,7 @@ void ClinicServer::setupHealthRoutes() {
 }
 
 void ClinicServer::registerRoutes() {
+    setupLogging();
     setupCors();
     setupStaticFiles();
     setupDoctorRoutes();
