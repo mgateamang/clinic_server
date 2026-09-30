@@ -472,6 +472,12 @@ void ClinicServer::setupPaymentRoutes() {
             }
 
             PaymentWebhookPayload payload = body.get<PaymentWebhookPayload>();
+            if (payload.status != "PAID" && payload.status != "FAILED") {
+                res.status = 400;
+                res.set_content(nlohmann::json{{"error", "Invalid payment status, must be 'PAID' or 'FAILED'"}}.dump(), "application/json");
+                return;
+            }
+
             bool ok = db_.updatePaymentStatus(payload.transaction_code, payload.status, payload.gateway_reference);
             if (!ok) {
                 res.status = 404;

@@ -189,6 +189,71 @@ void runTests() {
         assert(pubOk == true);
     }
 
+    // 9. Edge Cases & SQL Injection Resilience Tests
+    std::cout << "[TEST] Verifying Edge Cases & Security Hardening...\n";
+
+    // 9a. SQL injection resilience in getAppointments
+    std::string sqlInjectionDate = "2026-10-15' OR '1'='1";
+    std::string sqlInjectionStatus = "CONFIRMED' OR '1'='1";
+    auto safeAppts = db.getAppointments(sqlInjectionDate, sqlInjectionStatus);
+    assert(safeAppts.empty()); // Parameter binding prevents injection payload execution
+
+    // 9b. SQL injection resilience in getInventory
+    std::string sqlInjectionSearch = "Paracetamol' OR 1=1 --";
+    auto safeInv = db.getInventory(false, sqlInjectionSearch);
+    assert(safeInv.empty()); // Handled cleanly as literal search parameter
+
+    // 9c. SQL injection resilience in getPrescriptions
+    auto safeRx = db.getPrescriptions("DISPENSED' OR '1'='1", std::nullopt);
+    assert(safeRx.empty());
+
+    // 9d. POS duplicate item consolidation & stock consistency
+    int stockBeforeDupTest = db.getInventoryItem(item.id)->stock_quantity;
+    aidans::SaleCheckoutRequest dupReq;
+    dupReq.payment_method = "CASH";
+    aidans::SaleItemInput d1; d1.inventory_item_id = item.id; d1.quantity = 2;
+    aidans::SaleItemInput d2; d2.inventory_item_id = item.id; d2.quantity = 3;
+    dupReq.items.push_back(d1);
+    dupReq.items.push_back(d2); // Total requested = 5
+
+    aidans::SaleReceipt dupReceipt;
+    auto [dupSaleOk, dupTx] = db.processSale(dupReq, dupReceipt);
+    assert(dupSaleOk == true);
+    int stockAfterDupTest = db.getInventoryItem(item.id)->stock_quantity;
+    assert(stockAfterDupTest == stockBeforeDupTest - 5);
+
+    // 9e. POS rejection of non-positive quantity
+    aidans::SaleCheckoutRequest negReq;
+    negReq.payment_method = "CASH";
+    aidans::SaleItemInput negItem; negItem.inventory_item_id = item.id; negItem.quantity = -1;
+    negReq.items.push_back(negItem);
+    aidans::SaleReceipt negReceipt;
+    auto [negSaleOk, negErr] = db.processSale(negReq, negReceipt);
+    assert(negSaleOk == false);
+
+    // 9f. Rejection of invalid inventory item creation
+    aidans::InventoryItem invalidItem;
+    invalidItem.sku = ""; // Empty SKU must fail
+    invalidItem.name = "Bad Item";
+    assert(db.createInventoryItem(invalidItem) == -1);
+
+    invalidItem.sku = "VALID-SKU-999";
+    invalidItem.unit_price = -10.0; // Negative price must fail
+    assert(db.createInventoryItem(invalidItem) == -1);
+
+    // 9g. Rejection of restock delta == 0 or negative resulting stock
+    assert(db.restockItem(item.id, 0, "Zero delta") == false);
+    assert(db.restockItem(item.id, -99999, "Massive negative delta") == false);
+
+    // 9h. Rejection of invalid appointment status
+    assert(db.updateAppointmentStatus(appt1.id, "DROP_TABLE_HACK") == false);
+
+    // 9i. Rejection of empty patient phone / name
+    aidans::Patient invalidPatient;
+    invalidPatient.first_name = "";
+    invalidPatient.phone = "";
+    assert(db.findOrCreatePatient(invalidPatient) == -1);
+
     // Cleanup test db
     if (fs::exists(testDb)) {
         fs::remove(testDb);

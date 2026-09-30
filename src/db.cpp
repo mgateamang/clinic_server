@@ -4,6 +4,8 @@
 #include <chrono>
 #include <random>
 #include <iomanip>
+#include <unordered_set>
+#include <map>
 
 namespace aidans {
 
@@ -262,6 +264,10 @@ int64_t Database::createDoctor(const Doctor& doc) {
 }
 
 int64_t Database::findOrCreatePatient(const Patient& patient) {
+    if (patient.phone.empty() || patient.first_name.empty()) {
+        return -1;
+    }
+
     sqlite3_stmt* stmt = nullptr;
     const char* findSql = "SELECT id FROM patients WHERE phone = ? LIMIT 1;";
     if (sqlite3_prepare_v2(db_, findSql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -274,11 +280,13 @@ int64_t Database::findOrCreatePatient(const Patient& patient) {
         sqlite3_finalize(stmt);
     }
 
+    std::string dob = patient.date_of_birth.empty() ? "1990-01-01" : patient.date_of_birth;
+
     const char* insertSql = "INSERT INTO patients (first_name, last_name, date_of_birth, phone, email, address) VALUES (?, ?, ?, ?, ?, ?);";
     if (sqlite3_prepare_v2(db_, insertSql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, patient.first_name.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, patient.last_name.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 3, patient.date_of_birth.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, dob.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 4, patient.phone.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 5, patient.email.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 6, patient.address.c_str(), -1, SQLITE_TRANSIENT);
@@ -347,15 +355,22 @@ std::vector<Appointment> Database::getAppointments(const std::optional<std::stri
     )SQL";
 
     if (date.has_value()) {
-        sql += " AND strftime('%Y-%m-%d', a.appointment_time) = '" + date.value() + "'";
+        sql += " AND strftime('%Y-%m-%d', a.appointment_time) = ?";
     }
     if (status.has_value()) {
-        sql += " AND a.status = '" + status.value() + "'";
+        sql += " AND a.status = ?";
     }
     sql += " ORDER BY a.appointment_time ASC;";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        int paramIdx = 1;
+        if (date.has_value()) {
+            sqlite3_bind_text(stmt, paramIdx++, date.value().c_str(), -1, SQLITE_TRANSIENT);
+        }
+        if (status.has_value()) {
+            sqlite3_bind_text(stmt, paramIdx++, status.value().c_str(), -1, SQLITE_TRANSIENT);
+        }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             Appointment a;
             a.id = sqlite3_column_int64(stmt, 0);
@@ -413,6 +428,9 @@ std::optional<Appointment> Database::getAppointmentById(int64_t id) {
 }
 
 bool Database::bookAppointment(Appointment& appt, const Patient& patientInfo) {
+    if (appt.doctor_id <= 0 || appt.appointment_time.empty() || patientInfo.phone.empty()) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(dbMutex_);
     if (!db_) return false;
 
@@ -462,15 +480,23 @@ bool Database::bookAppointment(Appointment& appt, const Patient& patientInfo) {
 }
 
 bool Database::updateAppointmentStatus(int64_t id, const std::string& status) {
+    if (id <= 0) return false;
+    static const std::unordered_set<std::string> validStatuses = {
+        "PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW"
+    };
+    if (validStatuses.find(status) == validStatuses.end()) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(dbMutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql = "UPDATE appointments SET status = ? WHERE id = ?;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 2, id);
-        bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        int rc = sqlite3_step(stmt);
+        int changes = sqlite3_changes(db_);
         sqlite3_finalize(stmt);
-        return ok;
+        return (rc == SQLITE_DONE && changes > 0);
     }
     return false;
 }
@@ -483,12 +509,18 @@ std::vector<InventoryItem> Database::getInventory(bool lowStockOnly, const std::
         sql += " AND stock_quantity <= reorder_threshold";
     }
     if (!search.empty()) {
-        sql += " AND (name LIKE '%" + search + "%' OR sku LIKE '%" + search + "%' OR category LIKE '%" + search + "%')";
+        sql += " AND (name LIKE ? OR sku LIKE ? OR category LIKE ?)";
     }
     sql += " ORDER BY name ASC;";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        if (!search.empty()) {
+            std::string pattern = "%" + search + "%";
+            sqlite3_bind_text(stmt, 1, pattern.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, pattern.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 3, pattern.c_str(), -1, SQLITE_TRANSIENT);
+        }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             InventoryItem item;
             item.id = sqlite3_column_int64(stmt, 0);
@@ -558,6 +590,9 @@ std::optional<InventoryItem> Database::getInventoryItemBySku(const std::string& 
 }
 
 int64_t Database::createInventoryItem(const InventoryItem& item) {
+    if (item.sku.empty() || item.name.empty() || item.unit_price < 0.0 || item.stock_quantity < 0 || item.reorder_threshold < 0) {
+        return -1;
+    }
     std::lock_guard<std::mutex> lock(dbMutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql = "INSERT INTO inventory_items (sku, name, category, unit_price, stock_quantity, reorder_threshold, unit) VALUES (?, ?, ?, ?, ?, ?, ?);";
@@ -580,6 +615,7 @@ int64_t Database::createInventoryItem(const InventoryItem& item) {
 }
 
 bool Database::restockItem(int64_t id, int delta, const std::string& reason) {
+    if (id <= 0 || delta == 0) return false;
     std::lock_guard<std::mutex> lock(dbMutex_);
     execute("BEGIN IMMEDIATE TRANSACTION;");
 
@@ -617,6 +653,7 @@ bool Database::restockItem(int64_t id, int delta, const std::string& reason) {
         sqlite3_finalize(stmt);
     }
 
+    std::string finalReason = reason.empty() ? "Manual Inventory Adjustment" : reason;
     // Log audit
     const char* auditSql = "INSERT INTO inventory_audit_logs (inventory_item_id, change_type, quantity_changed, remaining_stock, reason) VALUES (?, ?, ?, ?, ?);";
     if (sqlite3_prepare_v2(db_, auditSql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -625,7 +662,7 @@ bool Database::restockItem(int64_t id, int delta, const std::string& reason) {
         sqlite3_bind_text(stmt, 2, changeType.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int(stmt, 3, delta);
         sqlite3_bind_int(stmt, 4, newStock);
-        sqlite3_bind_text(stmt, 5, reason.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 5, finalReason.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
@@ -639,6 +676,15 @@ std::vector<InventoryItem> Database::getLowStockAlerts() {
 }
 
 std::string Database::createPrescription(const Prescription& rx) {
+    if (rx.patient_id <= 0 || rx.doctor_id <= 0 || rx.items.empty()) {
+        return "";
+    }
+    for (const auto& it : rx.items) {
+        if (it.inventory_item_id <= 0 || it.quantity <= 0) {
+            return "";
+        }
+    }
+
     std::lock_guard<std::mutex> lock(dbMutex_);
     execute("BEGIN IMMEDIATE TRANSACTION;");
 
@@ -696,15 +742,22 @@ std::vector<Prescription> Database::getPrescriptions(const std::optional<std::st
         WHERE 1=1
     )SQL";
     if (status.has_value()) {
-        sql += " AND pr.status = '" + status.value() + "'";
+        sql += " AND pr.status = ?";
     }
     if (patientId.has_value()) {
-        sql += " AND pr.patient_id = " + std::to_string(patientId.value());
+        sql += " AND pr.patient_id = ?";
     }
     sql += " ORDER BY pr.created_at DESC;";
 
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+        int paramIdx = 1;
+        if (status.has_value()) {
+            sqlite3_bind_text(stmt, paramIdx++, status.value().c_str(), -1, SQLITE_TRANSIENT);
+        }
+        if (patientId.has_value()) {
+            sqlite3_bind_int64(stmt, paramIdx++, patientId.value());
+        }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             Prescription rx;
             rx.id = sqlite3_column_int64(stmt, 0);
@@ -722,15 +775,16 @@ std::vector<Prescription> Database::getPrescriptions(const std::optional<std::st
         sqlite3_finalize(stmt);
     }
 
-    // Hydrate prescription items
+    // Hydrate prescription items using single prepared statement
     const char* itemsSql = R"SQL(
         SELECT pi.id, pi.prescription_id, pi.inventory_item_id, inv.name, pi.quantity, pi.dosage_instructions
         FROM prescription_items pi
         JOIN inventory_items inv ON pi.inventory_item_id = inv.id
         WHERE pi.prescription_id = ?;
     )SQL";
-    for (auto& rx : list) {
-        if (sqlite3_prepare_v2(db_, itemsSql, -1, &stmt, nullptr) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db_, itemsSql, -1, &stmt, nullptr) == SQLITE_OK) {
+        for (auto& rx : list) {
+            sqlite3_reset(stmt);
             sqlite3_bind_int64(stmt, 1, rx.id);
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 PrescriptionItem it;
@@ -742,8 +796,8 @@ std::vector<Prescription> Database::getPrescriptions(const std::optional<std::st
                 it.dosage_instructions = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
                 rx.items.push_back(it);
             }
-            sqlite3_finalize(stmt);
         }
+        sqlite3_finalize(stmt);
     }
 
     return list;
@@ -819,6 +873,22 @@ bool Database::updatePrescriptionStatus(int64_t id, const std::string& status) {
 }
 
 std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& req, SaleReceipt& outReceipt) {
+    if (req.items.empty()) {
+        return {false, "Sale must contain at least one item"};
+    }
+
+    // Consolidate duplicate item IDs and validate quantities
+    std::map<int64_t, int> consolidatedItems;
+    for (const auto& itemInput : req.items) {
+        if (itemInput.inventory_item_id <= 0) {
+            return {false, "Invalid inventory item ID"};
+        }
+        if (itemInput.quantity <= 0) {
+            return {false, "Item quantity must be greater than zero"};
+        }
+        consolidatedItems[itemInput.inventory_item_id] += itemInput.quantity;
+    }
+
     std::lock_guard<std::mutex> lock(dbMutex_);
     execute("BEGIN IMMEDIATE TRANSACTION;");
 
@@ -857,18 +927,18 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
     };
     std::vector<ItemCalc> validatedItems;
 
-    for (const auto& itemInput : req.items) {
+    for (const auto& [itemId, requestedQty] : consolidatedItems) {
         sqlite3_stmt* stmt = nullptr;
         const char* iSql = "SELECT name, unit_price, stock_quantity FROM inventory_items WHERE id = ?;";
         if (sqlite3_prepare_v2(db_, iSql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int64(stmt, 1, itemInput.inventory_item_id);
+            sqlite3_bind_int64(stmt, 1, itemId);
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 ItemCalc ic;
-                ic.id = itemInput.inventory_item_id;
+                ic.id = itemId;
                 ic.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
                 ic.unitPrice = sqlite3_column_double(stmt, 1);
                 ic.currentStock = sqlite3_column_int(stmt, 2);
-                ic.requestedQty = itemInput.quantity;
+                ic.requestedQty = requestedQty;
                 ic.subtotal = ic.unitPrice * ic.requestedQty;
 
                 if (ic.requestedQty > ic.currentStock) {
@@ -882,7 +952,7 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
             } else {
                 sqlite3_finalize(stmt);
                 execute("ROLLBACK;");
-                return {false, "Inventory item ID " + std::to_string(itemInput.inventory_item_id) + " does not exist"};
+                return {false, "Inventory item ID " + std::to_string(itemId) + " does not exist"};
             }
             sqlite3_finalize(stmt);
         }
