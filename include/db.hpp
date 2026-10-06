@@ -36,7 +36,6 @@ public:
                                             const std::optional<std::string>& status = std::nullopt);
     std::optional<Appointment> getAppointmentById(int64_t id);
     bool bookAppointment(Appointment& appt, const Patient& patientInfo);
-    bool updateAppointmentStatus(int64_t id, const std::string& status);
 
     // Inventory
     std::vector<InventoryItem> getInventory(bool lowStockOnly = false, const std::string& search = "");
@@ -56,15 +55,9 @@ public:
     // POS & Sales (Atomic transaction)
     std::pair<bool, std::string> processSale(const SaleCheckoutRequest& req, SaleReceipt& outReceipt);
 
-    // Payments
-    bool updatePaymentStatus(const std::string& txCode, const std::string& status, const std::string& ref);
-
-    // Reports
-    DailySummaryReport getDailySummary(const std::string& date);
-
 private:
     sqlite3* db_{nullptr};
-    std::mutex dbMutex_; // SQLite connection serialization mutex for thread safety
+    std::mutex dbMutex_;
 
     bool execute(const std::string& sql);
     std::string generateUniqueCode(const std::string& prefix);

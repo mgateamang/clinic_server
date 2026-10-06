@@ -18,7 +18,6 @@ public:
     bool start();
     void stop();
 
-    // Direct access to components for testing
     Database& getDb() { return db_; }
     CacheManager& getCache() { return cache_; }
     httplib::Server& getHttpServer() { return svr_; }
@@ -40,8 +39,6 @@ private:
     void setupInventoryRoutes();
     void setupPrescriptionRoutes();
     void setupPosRoutes();
-    void setupPaymentRoutes();
-    void setupReportRoutes();
     void setupHealthRoutes();
 
     static std::vector<std::string> generateStandardSlots(const std::string& dateStr);

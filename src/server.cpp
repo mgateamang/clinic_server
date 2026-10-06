@@ -226,37 +226,6 @@ void ClinicServer::setupAppointmentRoutes() {
         }
     });
 
-    // PATCH /api/v1/appointments/{id}/status
-    svr_.Patch(R"(/api/v1/appointments/(\d+)/status)", [this](const httplib::Request& req, httplib::Response& res) {
-        try {
-            int64_t id = std::stoll(req.matches[1]);
-            auto body = nlohmann::json::parse(req.body);
-            if (!body.contains("status")) {
-                res.status = 400;
-                res.set_content(nlohmann::json{{"error", "Field 'status' is required"}}.dump(), "application/json");
-                return;
-            }
-
-            std::string status = body["status"].get<std::string>();
-            bool ok = db_.updateAppointmentStatus(id, status);
-            if (!ok) {
-                res.status = 404;
-                res.set_content(nlohmann::json{{"error", "Appointment not found or status update failed"}}.dump(), "application/json");
-                return;
-            }
-
-            auto appt = db_.getAppointmentById(id);
-            if (appt.has_value()) {
-                nlohmann::json resp = appt.value();
-                res.set_content(resp.dump(), "application/json");
-            } else {
-                res.set_content(nlohmann::json{{"success", true}}.dump(), "application/json");
-            }
-        } catch (const std::exception& e) {
-            res.status = 400;
-            res.set_content(nlohmann::json{{"error", e.what()}}.dump(), "application/json");
-        }
-    });
 }
 
 void ClinicServer::setupInventoryRoutes() {
@@ -328,21 +297,6 @@ void ClinicServer::setupInventoryRoutes() {
         }
     });
 
-    // POST /api/v1/inventory/publish
-    svr_.Post("/api/v1/inventory/publish", [this](const httplib::Request& req, httplib::Response& res) {
-        std::string action = "manual_sync";
-        int64_t itemId = 0;
-        try {
-            if (!req.body.empty()) {
-                auto b = nlohmann::json::parse(req.body);
-                if (b.contains("action")) action = b["action"].get<std::string>();
-                if (b.contains("item_id")) itemId = b["item_id"].get<int64_t>();
-            }
-        } catch (...) {}
-        bool ok = cache_.publishInventoryUpdate(action, itemId);
-        res.status = 200;
-        res.set_content(nlohmann::json{{"published", ok}, {"action", action}, {"item_id", itemId}}.dump(), "application/json");
-    });
 
     // GET /api/v1/inventory/alerts
     svr_.Get("/api/v1/inventory/alerts", [this](const httplib::Request&, httplib::Response& res) {
@@ -437,19 +391,6 @@ void ClinicServer::setupPosRoutes() {
                 return;
             }
 
-            if (saleReq.payment_method == "WEBHOOK_MOCK") {
-                // Store in ephemeral cache
-                nlohmann::json sessionJson = receipt;
-                cache_.setPaymentSession(receipt.transaction_code, sessionJson.dump());
-            }
-
-            if (!saleReq.prescription_code.empty()) {
-                cache_.removePendingPrescription(saleReq.prescription_code);
-            }
-
-            // Ripple update inventory to POS and Inventory terminals via Redis
-            cache_.publishInventoryUpdate("checkout", 0);
-
             res.status = 200;
             nlohmann::json resp = receipt;
             res.set_content(resp.dump(), "application/json");
@@ -460,70 +401,12 @@ void ClinicServer::setupPosRoutes() {
     });
 }
 
-void ClinicServer::setupPaymentRoutes() {
-    // POST /api/v1/payments/webhook
-    svr_.Post("/api/v1/payments/webhook", [this](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto body = nlohmann::json::parse(req.body);
-            if (!body.contains("transaction_code") || !body.contains("status")) {
-                res.status = 400;
-                res.set_content(nlohmann::json{{"error", "Fields 'transaction_code' and 'status' are required"}}.dump(), "application/json");
-                return;
-            }
-
-            PaymentWebhookPayload payload = body.get<PaymentWebhookPayload>();
-            if (payload.status != "PAID" && payload.status != "FAILED") {
-                res.status = 400;
-                res.set_content(nlohmann::json{{"error", "Invalid payment status, must be 'PAID' or 'FAILED'"}}.dump(), "application/json");
-                return;
-            }
-
-            bool ok = db_.updatePaymentStatus(payload.transaction_code, payload.status, payload.gateway_reference);
-            if (!ok) {
-                res.status = 404;
-                res.set_content(nlohmann::json{{"error", "Transaction code not found"}}.dump(), "application/json");
-                return;
-            }
-
-            cache_.clearPaymentSession(payload.transaction_code);
-
-            res.status = 200;
-            res.set_content(nlohmann::json{
-                {"received", true},
-                {"status", payload.status},
-                {"transaction_code", payload.transaction_code}
-            }.dump(), "application/json");
-        } catch (const std::exception& e) {
-            res.status = 400;
-            res.set_content(nlohmann::json{{"error", e.what()}}.dump(), "application/json");
-        }
-    });
-}
-
-void ClinicServer::setupReportRoutes() {
-    // GET /api/v1/reports/daily-summary?date=YYYY-MM-DD
-    svr_.Get("/api/v1/reports/daily-summary", [this](const httplib::Request& req, httplib::Response& res) {
-        if (!req.has_param("date")) {
-            res.status = 400;
-            res.set_content(nlohmann::json{{"error", "Query parameter 'date' (YYYY-MM-DD) is required"}}.dump(), "application/json");
-            return;
-        }
-
-        std::string date = req.get_param_value("date");
-        auto report = db_.getDailySummary(date);
-        nlohmann::json j = report;
-        res.set_content(j.dump(), "application/json");
-    });
-}
-
 void ClinicServer::setupHealthRoutes() {
-    auto healthHandler = [this](const httplib::Request&, httplib::Response& res) {
-        bool redisOk = cache_.isRedisOnline();
+    auto healthHandler = [](const httplib::Request&, httplib::Response& res) {
         nlohmann::json j = {
             {"status", "ok"},
             {"service", "aidans_clinic_server"},
-            {"version", "1.0.0"},
-            {"redis", redisOk ? "connected" : "offline"}
+            {"version", "1.0.0"}
         };
         res.status = 200;
         res.set_content(j.dump(), "application/json");
@@ -542,8 +425,6 @@ void ClinicServer::registerRoutes() {
     setupInventoryRoutes();
     setupPrescriptionRoutes();
     setupPosRoutes();
-    setupPaymentRoutes();
-    setupReportRoutes();
     setupHealthRoutes();
 }
 

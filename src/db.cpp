@@ -160,19 +160,6 @@ bool Database::initSchema() {
             FOREIGN KEY (transaction_id) REFERENCES sales_transactions(id) ON DELETE CASCADE,
             FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT
         );
-        CREATE INDEX IF NOT EXISTS idx_sales_items_tx ON sales_transaction_items(transaction_id);
-
-        CREATE TABLE IF NOT EXISTS inventory_audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            inventory_item_id INTEGER NOT NULL,
-            change_type TEXT CHECK(change_type IN ('SALE', 'RESTOCK', 'ADJUSTMENT', 'DISCARD')) NOT NULL,
-            quantity_changed INTEGER NOT NULL,
-            remaining_stock INTEGER NOT NULL,
-            reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_audit_item ON inventory_audit_logs(inventory_item_id);
     )SQL";
 
     return execute(schema);
@@ -495,28 +482,6 @@ bool Database::bookAppointment(Appointment& appt, const Patient& patientInfo) {
     return false;
 }
 
-bool Database::updateAppointmentStatus(int64_t id, const std::string& status) {
-    if (id <= 0) return false;
-    static const std::unordered_set<std::string> validStatuses = {
-        "PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW"
-    };
-    if (validStatuses.find(status) == validStatuses.end()) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(dbMutex_);
-    sqlite3_stmt* stmt = nullptr;
-    const char* sql = "UPDATE appointments SET status = ? WHERE id = ?;";
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int64(stmt, 2, id);
-        int rc = sqlite3_step(stmt);
-        int changes = sqlite3_changes(db_);
-        sqlite3_finalize(stmt);
-        return (rc == SQLITE_DONE && changes > 0);
-    }
-    return false;
-}
-
 std::vector<InventoryItem> Database::getInventory(bool lowStockOnly, const std::string& search) {
     std::lock_guard<std::mutex> lock(dbMutex_);
     std::vector<InventoryItem> list;
@@ -666,20 +631,6 @@ bool Database::restockItem(int64_t id, int delta, const std::string& reason) {
             execute("ROLLBACK;");
             return false;
         }
-        sqlite3_finalize(stmt);
-    }
-
-    std::string finalReason = reason.empty() ? "Manual Inventory Adjustment" : reason;
-    // Log audit
-    const char* auditSql = "INSERT INTO inventory_audit_logs (inventory_item_id, change_type, quantity_changed, remaining_stock, reason) VALUES (?, ?, ?, ?, ?);";
-    if (sqlite3_prepare_v2(db_, auditSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        std::string changeType = (delta >= 0) ? "RESTOCK" : "ADJUSTMENT";
-        sqlite3_bind_int64(stmt, 1, id);
-        sqlite3_bind_text(stmt, 2, changeType.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 3, delta);
-        sqlite3_bind_int(stmt, 4, newStock);
-        sqlite3_bind_text(stmt, 5, finalReason.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
 
@@ -980,7 +931,7 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
     }
 
     std::string txCode = generateUniqueCode("TX");
-    std::string paymentStatus = (req.payment_method == "WEBHOOK_MOCK") ? "PENDING" : "PAID";
+    std::string paymentStatus = "PAID";
 
     // Insert sales_transactions
     sqlite3_stmt* stmt = nullptr;
@@ -1007,9 +958,8 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
         return {false, "Failed to record sales transaction"};
     }
 
-    // Insert transaction line items & deduct stock atomically & record audit
+    // Insert transaction line items & deduct stock atomically
     for (const auto& item : validatedItems) {
-        // Line item
         const char* liSql = "INSERT INTO sales_transaction_items (transaction_id, inventory_item_id, quantity, unit_price, subtotal) VALUES (?, ?, ?, ?, ?);";
         if (sqlite3_prepare_v2(db_, liSql, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(stmt, 1, txId);
@@ -1021,24 +971,11 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
             sqlite3_finalize(stmt);
         }
 
-        // Deduct inventory
         int newStock = item.currentStock - item.requestedQty;
         const char* deductSql = "UPDATE inventory_items SET stock_quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;";
         if (sqlite3_prepare_v2(db_, deductSql, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int(stmt, 1, newStock);
             sqlite3_bind_int64(stmt, 2, item.id);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
-
-        // Audit log
-        const char* auditSql = "INSERT INTO inventory_audit_logs (inventory_item_id, change_type, quantity_changed, remaining_stock, reason) VALUES (?, 'SALE', ?, ?, ?);";
-        if (sqlite3_prepare_v2(db_, auditSql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int64(stmt, 1, item.id);
-            sqlite3_bind_int(stmt, 2, -item.requestedQty);
-            sqlite3_bind_int(stmt, 3, newStock);
-            std::string reason = "POS Sale " + txCode;
-            sqlite3_bind_text(stmt, 4, reason.c_str(), -1, SQLITE_TRANSIENT);
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
@@ -1051,8 +988,7 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
         outReceipt.items.push_back(ri);
     }
 
-    // Update prescription status to DISPENSED if paid immediately
-    if (prescriptionId > 0 && paymentStatus == "PAID") {
+    if (prescriptionId > 0) {
         const char* rxUpSql = "UPDATE prescriptions SET status = 'DISPENSED' WHERE id = ?;";
         if (sqlite3_prepare_v2(db_, rxUpSql, -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(stmt, 1, prescriptionId);
@@ -1069,99 +1005,6 @@ std::pair<bool, std::string> Database::processSale(const SaleCheckoutRequest& re
     outReceipt.created_at = "JUST NOW";
 
     return {true, txCode};
-}
-
-bool Database::updatePaymentStatus(const std::string& txCode, const std::string& status, const std::string& ref) {
-    std::lock_guard<std::mutex> lock(dbMutex_);
-    execute("BEGIN IMMEDIATE TRANSACTION;");
-
-    int64_t rxId = 0;
-    sqlite3_stmt* stmt = nullptr;
-    const char* findSql = "SELECT prescription_id FROM sales_transactions WHERE transaction_code = ?;";
-    if (sqlite3_prepare_v2(db_, findSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, txCode.c_str(), -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            if (sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
-                rxId = sqlite3_column_int64(stmt, 0);
-            }
-        } else {
-            sqlite3_finalize(stmt);
-            execute("ROLLBACK;");
-            return false;
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    const char* upSql = "UPDATE sales_transactions SET payment_status = ?, payment_reference = ? WHERE transaction_code = ?;";
-    if (sqlite3_prepare_v2(db_, upSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, ref.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 3, txCode.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-    }
-
-    if (rxId > 0 && status == "PAID") {
-        const char* rxSql = "UPDATE prescriptions SET status = 'DISPENSED' WHERE id = ?;";
-        if (sqlite3_prepare_v2(db_, rxSql, -1, &stmt, nullptr) == SQLITE_OK) {
-            sqlite3_bind_int64(stmt, 1, rxId);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
-    }
-
-    execute("COMMIT;");
-    return true;
-}
-
-DailySummaryReport Database::getDailySummary(const std::string& date) {
-    std::lock_guard<std::mutex> lock(dbMutex_);
-    DailySummaryReport report;
-    report.date = date;
-
-    // Sales totals
-    sqlite3_stmt* stmt = nullptr;
-    const char* salesSql = R"SQL(
-        SELECT COALESCE(SUM(total_amount), 0.0), COUNT(*)
-        FROM sales_transactions
-        WHERE (strftime('%Y-%m-%d', created_at) = ? OR strftime('%Y-%m-%d', created_at, 'localtime') = ?)
-          AND payment_status = 'PAID';
-    )SQL";
-    if (sqlite3_prepare_v2(db_, salesSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, date.c_str(), -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            report.total_sales_amount = sqlite3_column_double(stmt, 0);
-            report.total_transactions = sqlite3_column_int(stmt, 1);
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    // Prescriptions dispensed
-    const char* rxSql = R"SQL(
-        SELECT COUNT(*) FROM prescriptions
-        WHERE (strftime('%Y-%m-%d', created_at) = ? OR strftime('%Y-%m-%d', created_at, 'localtime') = ?)
-          AND status = 'DISPENSED';
-    )SQL";
-    if (sqlite3_prepare_v2(db_, rxSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, date.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, date.c_str(), -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            report.total_prescriptions_dispensed = sqlite3_column_int(stmt, 0);
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    // Low stock count
-    const char* lowSql = "SELECT COUNT(*) FROM inventory_items WHERE stock_quantity <= reorder_threshold;";
-    if (sqlite3_prepare_v2(db_, lowSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            report.low_stock_items_count = sqlite3_column_int(stmt, 0);
-        }
-        sqlite3_finalize(stmt);
-    }
-
-    return report;
 }
 
 } // namespace aidans

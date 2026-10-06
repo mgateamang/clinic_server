@@ -3,57 +3,34 @@
 #include <string>
 #include <vector>
 #include <unordered_set>
-#include <unordered_map>
-#include <deque>
-#include <mutex>
-#include <shared_mutex>
 #include <optional>
 
 namespace aidans {
 
+// ponytail: in-memory stub; cut external Redis socket dependency
 class CacheManager {
 public:
-    explicit CacheManager(const std::string& redisHost = "127.0.0.1", int redisPort = 6379);
-    ~CacheManager();
+    explicit CacheManager(const std::string& = "127.0.0.1", int = 6379) {}
+    ~CacheManager() = default;
 
-    // Redis Pub/Sub & Health
-    void setRedisConfig(const std::string& host, int port);
-    bool isRedisOnline();
-    bool publishInventoryUpdate(const std::string& action, int64_t itemId = 0);
+    void setRedisConfig(const std::string&, int) {}
+    bool isRedisOnline() { return false; }
+    bool publishInventoryUpdate(const std::string&, int64_t = 0) { return true; }
 
-    // Doctor booked slots cache: doctor:{id}:slots:{date}
-    void cacheBookedSlot(int64_t doctorId, const std::string& date, const std::string& timeSlot);
-    bool isSlotBooked(int64_t doctorId, const std::string& date, const std::string& timeSlot);
-    void setBookedSlots(int64_t doctorId, const std::string& date, const std::vector<std::string>& slots);
+    void cacheBookedSlot(int64_t, const std::string&, const std::string&) {}
+    bool isSlotBooked(int64_t, const std::string&, const std::string&) { return false; }
+    void setBookedSlots(int64_t, const std::string&, const std::vector<std::string>&) {}
 
-    // Low stock items: inventory:low_stock_set
-    void setLowStockItem(int64_t itemId, bool isLowStock);
-    std::unordered_set<int64_t> getLowStockItemIds();
+    void setLowStockItem(int64_t, bool) {}
+    std::unordered_set<int64_t> getLowStockItemIds() { return {}; }
 
-    // Prescription FIFO queue: prescription:queue:pending
-    void pushPendingPrescription(const std::string& rxCode);
-    std::vector<std::string> getPendingPrescriptions();
-    void removePendingPrescription(const std::string& rxCode);
+    void pushPendingPrescription(const std::string&) {}
+    std::vector<std::string> getPendingPrescriptions() { return {}; }
+    void removePendingPrescription(const std::string&) {}
 
-    // Payment ephemeral state: payment:tx:{code}
-    void setPaymentSession(const std::string& txCode, const std::string& jsonState);
-    std::optional<std::string> getPaymentSession(const std::string& txCode);
-    void clearPaymentSession(const std::string& txCode);
-
-private:
-    std::string redisHost_{"127.0.0.1"};
-    int redisPort_{6379};
-    int persistentSock_{-1};
-    std::mutex socketMutex_;
-
-    std::shared_mutex mutex_;
-    // doctor_id -> map of date -> set of booked time strings
-    std::unordered_map<std::string, std::unordered_set<std::string>> slotCache_;
-    std::unordered_set<int64_t> lowStockSet_;
-    std::deque<std::string> pendingPrescriptionQueue_;
-    std::unordered_map<std::string, std::string> paymentSessions_;
-
-    bool sendRedisCommand(const std::string& cmd, std::string* replyOut = nullptr);
+    void setPaymentSession(const std::string&, const std::string&) {}
+    std::optional<std::string> getPaymentSession(const std::string&) { return std::nullopt; }
+    void clearPaymentSession(const std::string&) {}
 };
 
 } // namespace aidans

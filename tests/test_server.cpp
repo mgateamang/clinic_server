@@ -159,40 +159,7 @@ void runTests() {
     auto dispensedRx = db.getPrescriptionByCode(rxCode).value();
     assert(dispensedRx.status == "DISPENSED");
 
-    // 6. Webhook Mock Payment Integration
-    std::cout << "[TEST] Testing Payment Webhook Placeholder...\n";
-    aidans::SaleCheckoutRequest webhookReq;
-    webhookReq.payment_method = "WEBHOOK_MOCK";
-    aidans::SaleItemInput whItem;
-    whItem.inventory_item_id = item.id;
-    whItem.quantity = 1;
-    webhookReq.items.push_back(whItem);
-
-    aidans::SaleReceipt whReceipt;
-    auto [whSaleOk, whTxCode] = db.processSale(webhookReq, whReceipt);
-    assert(whSaleOk == true);
-    assert(whReceipt.payment_status == "PENDING");
-
-    // Process webhook confirmation
-    bool whUpdated = db.updatePaymentStatus(whTxCode, "PAID", "ch_stripe_mock_9918");
-    assert(whUpdated == true);
-
-    // 7. Daily Summary Report
-    std::cout << "[TEST] Verifying Daily Summary Reporting...\n";
-    auto todayReport = db.getDailySummary("2026-10-15");
-    assert(todayReport.date == "2026-10-15");
-
-    // 8. Redis Pub/Sub Ripple Update Check
-    std::cout << "[TEST] Verifying Redis Pub/Sub Cache Manager...\n";
-    aidans::CacheManager cache("127.0.0.1", 6379);
-    bool redisOnline = cache.isRedisOnline();
-    std::cout << "  -> Redis is " << (redisOnline ? "ONLINE" : "OFFLINE (fallback verified)") << "\n";
-    bool pubOk = cache.publishInventoryUpdate("test_ripple", 1);
-    if (redisOnline) {
-        assert(pubOk == true);
-    }
-
-    // 9. Edge Cases & SQL Injection Resilience Tests
+    // 6. Edge Cases & SQL Injection Resilience Tests
     std::cout << "[TEST] Verifying Edge Cases & Security Hardening...\n";
 
     // 9a. SQL injection resilience in getAppointments
@@ -248,10 +215,7 @@ void runTests() {
     assert(db.restockItem(item.id, 0, "Zero delta") == false);
     assert(db.restockItem(item.id, -99999, "Massive negative delta") == false);
 
-    // 9h. Rejection of invalid appointment status
-    assert(db.updateAppointmentStatus(appt1.id, "DROP_TABLE_HACK") == false);
-
-    // 9i. Rejection of empty patient phone / name
+    // Rejection of empty patient phone / name
     aidans::Patient invalidPatient;
     invalidPatient.first_name = "";
     invalidPatient.phone = "";
