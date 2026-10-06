@@ -7,13 +7,16 @@
 namespace fs = std::filesystem;
 
 void runTests() {
+    std::cout << std::unitbuf;
     std::string testDb = "test_aidans.db";
-    if (fs::exists(testDb)) {
-        fs::remove(testDb);
-    }
+    std::error_code ec;
+    fs::remove(testDb, ec);
+    fs::remove(testDb + "-wal", ec);
+    fs::remove(testDb + "-shm", ec);
 
-    std::cout << "[TEST] Initializing Database & Seed Data...\n";
-    aidans::Database db(testDb);
+    {
+        std::cout << "[TEST] Initializing Database & Seed Data...\n";
+        aidans::Database db(testDb);
     assert(db.initSchema());
     db.seedInitialDataIfEmpty();
 
@@ -253,11 +256,12 @@ void runTests() {
     invalidPatient.first_name = "";
     invalidPatient.phone = "";
     assert(db.findOrCreatePatient(invalidPatient) == -1);
+    }
 
     // Cleanup test db
-    if (fs::exists(testDb)) {
-        fs::remove(testDb);
-    }
+    fs::remove(testDb, ec);
+    fs::remove(testDb + "-wal", ec);
+    fs::remove(testDb + "-shm", ec);
 
     std::cout << "\n>>> ALL CLINIC_SERVER TESTS PASSED SUCCESSFULLY! <<<\n\n";
 }

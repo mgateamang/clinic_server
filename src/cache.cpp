@@ -2,11 +2,39 @@
 #include <algorithm>
 #include <iostream>
 #include <cstring>
+#ifdef _WIN32
+#ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#define CLOSE_SOCK(s) closesocket(s)
+#define MSG_NOSIGNAL 0
+using socket_size_t = int;
+#else
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
+#define CLOSE_SOCK(s) close(s)
+using socket_size_t = ssize_t;
+#endif
+
+#ifdef _WIN32
+static struct WSAInitializer {
+    WSAInitializer() {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+    }
+} g_wsaInit;
+#endif
 
 namespace aidans {
 
@@ -21,7 +49,7 @@ CacheManager::CacheManager(const std::string& redisHost, int redisPort)
 CacheManager::~CacheManager() {
     std::lock_guard<std::mutex> sockLock(socketMutex_);
     if (persistentSock_ >= 0) {
-        close(persistentSock_);
+        CLOSE_SOCK(persistentSock_);
         persistentSock_ = -1;
     }
 }
@@ -32,7 +60,7 @@ void CacheManager::setRedisConfig(const std::string& host, int port) {
     redisHost_ = host;
     redisPort_ = port;
     if (persistentSock_ >= 0) {
-        close(persistentSock_);
+        CLOSE_SOCK(persistentSock_);
         persistentSock_ = -1;
     }
 }
@@ -42,18 +70,24 @@ bool CacheManager::sendRedisCommand(const std::string& cmd, std::string* replyOu
 
     auto connectSocket = [this]() -> bool {
         if (persistentSock_ >= 0) {
-            close(persistentSock_);
+            CLOSE_SOCK(persistentSock_);
             persistentSock_ = -1;
         }
 
-        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        int sock = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
         if (sock < 0) return false;
 
+#ifdef _WIN32
+        DWORD tv = 400; // 400ms timeout
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+#else
         struct timeval tv;
         tv.tv_sec = 0;
         tv.tv_usec = 400000; // 400ms timeout
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
         setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+#endif
 
         struct sockaddr_in serv_addr;
         std::memset(&serv_addr, 0, sizeof(serv_addr));
@@ -63,16 +97,56 @@ bool CacheManager::sendRedisCommand(const std::string& cmd, std::string* replyOu
         if (inet_pton(AF_INET, redisHost_.c_str(), &serv_addr.sin_addr) <= 0) {
             struct hostent* he = gethostbyname(redisHost_.c_str());
             if (!he) {
-                close(sock);
+                CLOSE_SOCK(sock);
                 return false;
             }
             std::memcpy(&serv_addr.sin_addr, he->h_addr_list[0], he->h_length);
         }
 
-        if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-            close(sock);
+#ifdef _WIN32
+        u_long nonblock = 1;
+        ioctlsocket(sock, FIONBIO, &nonblock);
+#endif
+
+        int connectRes = connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+        if (connectRes < 0) {
+#ifdef _WIN32
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK) {
+                fd_set wFds, eFds;
+                FD_ZERO(&wFds);
+                FD_ZERO(&eFds);
+                FD_SET(static_cast<SOCKET>(sock), &wFds);
+                FD_SET(static_cast<SOCKET>(sock), &eFds);
+                struct timeval tvConn;
+                tvConn.tv_sec = 0;
+                tvConn.tv_usec = 200000; // 200ms timeout
+                int sel = select(0, nullptr, &wFds, &eFds, &tvConn);
+                if (sel <= 0 || FD_ISSET(static_cast<SOCKET>(sock), &eFds)) {
+                    CLOSE_SOCK(sock);
+                    return false;
+                }
+                int soError = 0;
+                int len = sizeof(soError);
+                getsockopt(static_cast<SOCKET>(sock), SOL_SOCKET, SO_ERROR, (char*)&soError, &len);
+                if (soError != 0) {
+                    CLOSE_SOCK(sock);
+                    return false;
+                }
+            } else {
+                CLOSE_SOCK(sock);
+                return false;
+            }
+#else
+            CLOSE_SOCK(sock);
             return false;
+#endif
         }
+
+#ifdef _WIN32
+        nonblock = 0;
+        ioctlsocket(sock, FIONBIO, &nonblock);
+#endif
 
         persistentSock_ = sock;
         return true;
@@ -83,13 +157,13 @@ bool CacheManager::sendRedisCommand(const std::string& cmd, std::string* replyOu
     }
 
     // Try sending command on existing socket
-    ssize_t sent = send(persistentSock_, cmd.c_str(), cmd.size(), MSG_NOSIGNAL);
-    if (sent != static_cast<ssize_t>(cmd.size())) {
+    socket_size_t sent = send(persistentSock_, cmd.c_str(), static_cast<int>(cmd.size()), MSG_NOSIGNAL);
+    if (sent != static_cast<socket_size_t>(cmd.size())) {
         // Reconnect once and retry
         if (!connectSocket()) return false;
-        sent = send(persistentSock_, cmd.c_str(), cmd.size(), MSG_NOSIGNAL);
-        if (sent != static_cast<ssize_t>(cmd.size())) {
-            close(persistentSock_);
+        sent = send(persistentSock_, cmd.c_str(), static_cast<int>(cmd.size()), MSG_NOSIGNAL);
+        if (sent != static_cast<socket_size_t>(cmd.size())) {
+            CLOSE_SOCK(persistentSock_);
             persistentSock_ = -1;
             return false;
         }
@@ -97,12 +171,12 @@ bool CacheManager::sendRedisCommand(const std::string& cmd, std::string* replyOu
 
     if (replyOut) {
         char buf[256];
-        ssize_t n = recv(persistentSock_, buf, sizeof(buf) - 1, 0);
+        socket_size_t n = recv(persistentSock_, buf, sizeof(buf) - 1, 0);
         if (n > 0) {
             buf[n] = '\0';
             *replyOut = std::string(buf, n);
         } else {
-            close(persistentSock_);
+            CLOSE_SOCK(persistentSock_);
             persistentSock_ = -1;
             return false;
         }

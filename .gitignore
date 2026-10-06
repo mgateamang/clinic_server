@@ -3,3 +3,5 @@ build/
 *.db-wal
 *.db-shm
 *.log
+subprojects/*/
+subprojects/packagecache/
