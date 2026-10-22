@@ -1,4 +1,4 @@
-#pragma once
+#pragma once // Ensure header file is included only once per translation unit
 
 /**
  * @file server.hpp
@@ -16,16 +16,16 @@
  *    30-minute booking intervals excluding existing appointments.
  */
 
-#include <string>
-#include <memory>
-#include <httplib.h>
-#include "db.hpp"
-#include "cache.hpp"
+#include <string> // Include string for declarations and types
+#include <memory> // Include memory for declarations and types
+#include <httplib.h> // Include httplib.h for declarations and types
+#include "db.hpp" // Include db.hpp for declarations and types
+#include "cache.hpp" // Include cache.hpp for declarations and types
 
-namespace aidans {
+namespace aidans { // Execute clinical workflow step
 
-class ClinicServer {
-public:
+class ClinicServer { // Execute clinical workflow step
+public: // Execute clinical workflow step
     /**
      * @brief Constructs the clinic server instance.
      * @param host IP network interface to bind (e.g. "0.0.0.0" for all interfaces).
@@ -36,37 +36,37 @@ public:
      * @param redisPort Redis cache port.
      * @param verbose When true, prints structured request logs with latency timings.
      */
-    ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir = "",
-                 const std::string& redisHost = "127.0.0.1", int redisPort = 6379, bool verbose = true);
+    ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir = "", // Assign value to target variable
+                 const std::string& redisHost = "127.0.0.1", int redisPort = 6379, bool verbose = true); // Assign value to target variable
 
-    ~ClinicServer() = default;
+    ~ClinicServer() = default; // Assign value to target variable
 
     /**
      * @brief Registers all HTTP REST API endpoints and middleware handlers.
      */
-    void registerRoutes();
+    void registerRoutes(); // Execute clinical workflow step
 
     /**
      * @brief Starts the HTTP listener loop. Blocks until stopped or terminated.
      * @return true on clean shutdown, false on bind/listen failure.
      */
-    bool start();
+    bool start(); // Execute clinical workflow step
 
     /**
      * @brief Gracefully stops the HTTP server and terminates active worker threads.
      */
-    void stop();
+    void stop(); // Execute clinical workflow step
 
     /// Accessor for underlying SQLite database instance
-    Database& getDb() { return db_; }
+    Database& getDb() { return db_; } // Execute clinical workflow step
 
     /// Accessor for cache manager instance
-    CacheManager& getCache() { return cache_; }
+    CacheManager& getCache() { return cache_; } // Execute clinical workflow step
 
     /// Accessor for underlying httplib server instance
-    httplib::Server& getHttpServer() { return svr_; }
+    httplib::Server& getHttpServer() { return svr_; } // Execute clinical workflow step
 
-private:
+private: // Execute clinical workflow step
     std::string host_;         ///< Bound host IP
     int port_;                 ///< Bound TCP port
     std::string staticDir_;    ///< Static web portal assets folder
@@ -76,15 +76,15 @@ private:
     httplib::Server svr_;      ///< Multi-threaded HTTP server engine
 
     // Internal initialization and routing helpers
-    void setupLogging();
-    void setupCors();
-    void setupStaticFiles();
-    void setupDoctorRoutes();
-    void setupAppointmentRoutes();
-    void setupInventoryRoutes();
-    void setupPrescriptionRoutes();
-    void setupPosRoutes();
-    void setupHealthRoutes();
+    void setupLogging(); // Execute clinical workflow step
+    void setupCors(); // Execute clinical workflow step
+    void setupStaticFiles(); // Execute clinical workflow step
+    void setupDoctorRoutes(); // Execute clinical workflow step
+    void setupAppointmentRoutes(); // Execute clinical workflow step
+    void setupInventoryRoutes(); // Execute clinical workflow step
+    void setupPrescriptionRoutes(); // Execute clinical workflow step
+    void setupPosRoutes(); // Execute clinical workflow step
+    void setupHealthRoutes(); // Execute clinical workflow step
 
     /**
      * @brief Helper to generate standard 30-minute clinical operating slots
@@ -92,7 +92,7 @@ private:
      * @param dateStr Target appointment date (YYYY-MM-DD).
      * @return Vector of formatted slot times (e.g. "09:00", "09:30", ...).
      */
-    static std::vector<std::string> generateStandardSlots(const std::string& dateStr);
-};
+    static std::vector<std::string> generateStandardSlots(const std::string& dateStr); // Execute clinical workflow step
+}; // Scope delimiter
 
 } // namespace aidans

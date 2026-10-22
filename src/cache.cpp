@@ -8,6 +8,6 @@
  * decoupled from external cache cluster infrastructure.
  */
 
-#include "cache.hpp"
+#include "cache.hpp" // Include cache.hpp for declarations and types
 
 // In embedded standalone architecture, in-memory operations satisfy all cache contracts.
