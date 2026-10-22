@@ -1,3 +1,20 @@
+/**
+ * @file server.cpp
+ * @brief HTTP REST Controller & Endpoint Routing Implementation.
+ *
+ * Implements the core business logic, input validation, request parsing,
+ * and JSON serialization for all clinical REST endpoints in AIDANS.
+ *
+ * Endpoint Domains:
+ *  - CORS Pre-routing Handler & HTTP Request Logging Middleware
+ *  - Doctors (/api/v1/doctors)
+ *  - Scheduling & Appointments (/api/v1/appointments, /available-slots)
+ *  - Medical Inventory & Supply Chain (/api/v1/inventory)
+ *  - Digital e-Prescriptions (/api/v1/prescriptions)
+ *  - Pharmacy Point-of-Sale Checkout (/api/v1/pos/checkout)
+ *  - Health Check & Static Web Asset Serving (/health, /)
+ */
+
 #include "server.hpp"
 #include <iostream>
 #include <fstream>
@@ -11,11 +28,16 @@ namespace fs = std::filesystem;
 
 namespace aidans {
 
+// Thread-local timestamp storage to measure microsecond latency per request
 static thread_local std::chrono::steady_clock::time_point g_reqStartTime;
 
+/**
+ * @brief Constructs the ClinicServer, initializing database schema and seed data.
+ */
 ClinicServer::ClinicServer(const std::string& host, int port, const std::string& dbPath, const std::string& staticDir,
                            const std::string& redisHost, int redisPort, bool verbose)
     : host_(host), port_(port), staticDir_(staticDir), verbose_(verbose), db_(dbPath), cache_(redisHost, redisPort) {
+    // Ensure SQLite database tables, indices, and seed data exist
     db_.initSchema();
     db_.seedInitialDataIfEmpty();
 }

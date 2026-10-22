@@ -1,10 +1,26 @@
+/**
+ * @file main.cpp
+ * @brief Entry point executable for AIDANS C++20 Clinic Server.
+ *
+ * Responsibilities:
+ *  - Parses command-line arguments (host, port, SQLite DB path, static assets path).
+ *  - Registers OS signal handlers (SIGINT, SIGTERM) for graceful server shutdown.
+ *  - Initializes database schema, pre-populates initial catalogs if empty.
+ *  - Spins up the multi-threaded HTTP server listener.
+ */
+
 #include "server.hpp"
 #include <iostream>
 #include <csignal>
 #include <string>
 
+// Global pointer to server instance for clean signal termination
 static aidans::ClinicServer* g_server = nullptr;
 
+/**
+ * @brief Signal handler callback for graceful shutdown on Ctrl+C or kill.
+ * @param signum OS signal code (e.g., SIGINT, SIGTERM).
+ */
 void signalHandler(int signum) {
     std::cout << "\nReceived signal " << signum << ", shutting down clinic_server..." << std::endl;
     if (g_server) {
@@ -13,6 +29,7 @@ void signalHandler(int signum) {
 }
 
 int main(int argc, char* argv[]) {
+    // Default server configuration parameters
     std::string host = "0.0.0.0";
     int port = 8080;
     std::string dbPath = "aidans.db";
@@ -21,6 +38,7 @@ int main(int argc, char* argv[]) {
     int redisPort = 6379;
     bool verbose = true;
 
+    // Command-line flag parsing
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--host" && i + 1 < argc) {
@@ -54,19 +72,28 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Install POSIX / Windows signal handlers
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
     std::cout << "=========================================================\n"
-              << "   AIDANS (Automated Inventory, Data, Appointment System)\n"
-              << "   Elizabeth's Clinic Backend Server\n"
-              << "=========================================================\n";
+              << "       AIDANS Clinic Server (High-Performance C++20)     \n"
+              << "=========================================================\n"
+              << " Listening on  : http://" << host << ":" << port << "\n"
+              << " Database file : " << dbPath << "\n"
+              << " Web Portal dir: " << staticDir << "\n"
+              << "=========================================================" << std::endl;
 
+    // Instantiate and start server
     aidans::ClinicServer server(host, port, dbPath, staticDir, redisHost, redisPort, verbose);
     g_server = &server;
-
     server.registerRoutes();
-    server.start();
 
+    if (!server.start()) {
+        std::cerr << "Fatal: Failed to start clinic_server on " << host << ":" << port << std::endl;
+        return 1;
+    }
+
+    std::cout << "Clinic server stopped cleanly. Goodbye!" << std::endl;
     return 0;
 }

@@ -1,3 +1,15 @@
+/**
+ * @file db.cpp
+ * @brief SQLite3 Data Access Layer Implementation.
+ *
+ * Implements high-performance, ACID-compliant database persistence for AIDANS:
+ *  - WAL mode (Write-Ahead Logging) configuration and busy-timeout handling.
+ *  - Parameterized prepared statements preventing SQL injection attacks.
+ *  - Relational joins across doctors, patients, appointments, and prescriptions.
+ *  - Atomic multi-table transactions for Point-of-Sale checkouts:
+ *    stock verification -> stock decrement -> sales audit log -> prescription dispense.
+ */
+
 #include "db.hpp"
 #include <iostream>
 #include <sstream>
@@ -9,6 +21,9 @@
 
 namespace aidans {
 
+/**
+ * @brief Opens the SQLite database connection handle.
+ */
 Database::Database(const std::string& dbPath) {
     int rc = sqlite3_open(dbPath.c_str(), &db_);
     if (rc != SQLITE_OK) {

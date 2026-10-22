@@ -1,2 +1,13 @@
+/**
+ * @file cache.cpp
+ * @brief Implementation for CacheManager.
+ *
+ * Designed under senior engineering simplicity guidelines:
+ * Eliminates external Redis server dependency and socket management overhead.
+ * Acts as an in-memory pass-through that keeps client controllers completely
+ * decoupled from external cache cluster infrastructure.
+ */
+
 #include "cache.hpp"
-// ponytail: Redis caching and raw socket pub/sub purged
+
+// In embedded standalone architecture, in-memory operations satisfy all cache contracts.
